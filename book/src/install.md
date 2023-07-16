@@ -6,9 +6,10 @@
 - [Linux](#linux)
   - [Ubuntu](#ubuntu)
   - [Fedora/RHEL](#fedorarhel)
-  - [Arch Linux community](#arch-linux-community)
+  - [Arch Linux extra](#arch-linux-extra)
   - [NixOS](#nixos)
   - [Flatpak](#flatpak)
+  - [Snap](#snap)
   - [AppImage](#appimage)
 - [macOS](#macos)
   - [Homebrew Core](#homebrew-core)
@@ -70,9 +71,9 @@ sudo dnf copr enable varlad/helix
 sudo dnf install helix
 ```
 
-### Arch Linux community
+### Arch Linux extra
 
-Releases are available in the `community` repository:
+Releases are available in the `extra` repository:
 
 ```sh
 sudo pacman -S helix
@@ -103,6 +104,23 @@ Helix is available on [Flathub](https://flathub.org/en-GB/apps/com.helix_editor.
 flatpak install flathub com.helix_editor.Helix
 flatpak run com.helix_editor.Helix
 ```
+
+### Snap
+
+Helix is available on [Snapcraft](https://snapcraft.io/helix) and can be installed with:
+
+```sh
+snap install --classic helix
+```
+
+This will install Helix as `/snap/bin/helix` (so make sure `/snap/bin` is in your `PATH`), which is not the preferred invocation (`hx`).
+As a workaround you can manually alias the command globally with:
+
+```sh
+snap alias helix hx
+```
+
+Or, otherwise, just alias in your shell's config.
 
 ### AppImage
 
