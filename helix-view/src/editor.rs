@@ -1,10 +1,10 @@
 use crate::{
     align_view,
-    clipboard::{get_clipboard_provider, ClipboardProvider},
     document::{DocumentSavedEventFuture, DocumentSavedEventResult, Mode, SavePoint},
     graphics::{CursorKind, Rect},
     info::Info,
     input::KeyEvent,
+    register::Registers,
     theme::{self, Theme},
     tree::{self, Tree},
     view::ViewPosition,
@@ -40,7 +40,6 @@ use tokio::{
 use anyhow::{anyhow, bail, Error};
 
 pub use helix_core::diagnostic::Severity;
-pub use helix_core::register::Registers;
 use helix_core::{
     auto_pairs::AutoPairs,
     syntax::{self, AutoPairConfig, SoftWrap},
@@ -288,6 +287,24 @@ pub struct Config {
     pub workspace_lsp_roots: Vec<PathBuf>,
     /// Which line ending to choose for new documents. Defaults to `native`. i.e. `crlf` on Windows, otherwise `lf`.
     pub default_line_ending: LineEndingConfig,
+    /// Enables smart tab
+    pub smart_tab: Option<SmartTabConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case", default)]
+pub struct SmartTabConfig {
+    pub enable: bool,
+    pub supersede_menu: bool,
+}
+
+impl Default for SmartTabConfig {
+    fn default() -> Self {
+        SmartTabConfig {
+            enable: true,
+            supersede_menu: false,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -404,6 +421,7 @@ impl Default for StatusLineConfig {
                 E::Mode,
                 E::Spinner,
                 E::FileName,
+                E::ReadOnlyIndicator,
                 E::FileModificationIndicator,
             ],
             center: vec![],
@@ -455,6 +473,9 @@ pub enum StatusLineElement {
 
     // The file modification indicator
     FileModificationIndicator,
+
+    /// An indicator that shows `"[readonly]"` when a file cannot be written
+    ReadOnlyIndicator,
 
     /// The file encoding
     FileEncoding,
@@ -821,6 +842,7 @@ impl Default for Config {
             completion_replace: false,
             workspace_lsp_roots: Vec::new(),
             default_line_ending: LineEndingConfig::default(),
+            smart_tab: Some(SmartTabConfig::default()),
         }
     }
 }
@@ -874,8 +896,6 @@ pub struct Editor {
     pub debugger: Option<dap::Client>,
     pub debugger_events: SelectAll<UnboundedReceiverStream<dap::Payload>>,
     pub breakpoints: HashMap<PathBuf, Vec<Breakpoint>>,
-
-    pub clipboard_provider: Box<dyn ClipboardProvider>,
 
     pub syn_loader: Arc<syntax::Loader>,
     pub theme_loader: Arc<theme::Loader>,
@@ -975,6 +995,13 @@ pub enum Action {
     VerticalSplit,
 }
 
+impl Action {
+    /// Whether to align the view to the cursor after executing this action
+    pub fn align_view(&self, view: &View, new_doc: DocumentId) -> bool {
+        !matches!((self, view.doc == new_doc), (Action::Load, false))
+    }
+}
+
 /// Error thrown on failed document closed
 pub enum CloseError {
     /// Document doesn't exist
@@ -1023,7 +1050,6 @@ impl Editor {
             last_theme: None,
             last_selection: None,
             registers: Registers::default(),
-            clipboard_provider: get_clipboard_provider(),
             status_msg: None,
             autoinfo: None,
             idle_timer: Box::pin(sleep(conf.idle_timeout)),
@@ -1535,7 +1561,18 @@ impl Editor {
 
         let path = path.map(|path| path.into());
         let doc = doc_mut!(self, &doc_id);
-        let future = doc.save(path, force)?;
+        let doc_save_future = doc.save(path, force)?;
+
+        // When a file is written to, notify the file event handler.
+        // Note: This can be removed once proper file watching is implemented.
+        let handler = self.language_servers.file_event_handler.clone();
+        let future = async move {
+            let res = doc_save_future.await;
+            if let Ok(event) = &res {
+                handler.file_changed(event.path.clone());
+            }
+            res
+        };
 
         use futures_util::stream;
 
@@ -1671,6 +1708,14 @@ impl Editor {
         &self,
         timeout: Option<u64>,
     ) -> Result<(), tokio::time::error::Elapsed> {
+        // Remove all language servers from the file event handler.
+        // Note: this is non-blocking.
+        for client in self.language_servers.iter_clients() {
+            self.language_servers
+                .file_event_handler
+                .remove_client(client.id());
+        }
+
         tokio::time::timeout(
             Duration::from_millis(timeout.unwrap_or(3000)),
             future::join_all(
