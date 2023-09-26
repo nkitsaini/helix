@@ -245,9 +245,12 @@ We use a similar set of scopes as
 
 - `diff` - version control changes
   - `plus` - additions
+    - `gutter` - gutter indicator
   - `minus` - deletions
+    - `gutter` - gutter indicator
   - `delta` - modifications
     - `moved` - renamed or moved files/changes
+    - `gutter` - gutter indicator
 
 #### Interface
 
@@ -301,6 +304,7 @@ These scopes are used for theming the editor interface:
 | `ui.text.inactive`                | Same as `ui.text` but when the text is inactive (e.g. suggestions)                             |
 | `ui.text.info`                    | The key: command text in `ui.popup.info` boxes                                                 |
 | `ui.virtual.ruler`                | Ruler columns (see the [`editor.rulers` config][editor-section])                               |
+| `ui.virtual.diagnostics`    | Default style for inline diagnostics lines (notably control the background)                    |
 | `ui.virtual.whitespace`           | Visible whitespace characters                                                                  |
 | `ui.virtual.indent-guide`         | Vertical indent width guides                                                                   |
 | `ui.virtual.inlay-hint`           | Default style for inlay hints of all kinds                                                     |
