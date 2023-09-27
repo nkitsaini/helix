@@ -5,7 +5,8 @@ use crate::{
     key,
     keymap::{KeymapResult, Keymaps},
     ui::{
-        document::{render_document, LinePos, TextRenderer, TranslatedPosition},
+        document::{render_document, LinePos, TextRenderer},
+        text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
         Completion, ProgressSpinners,
     },
 };
@@ -27,14 +28,14 @@ use helix_view::{
     graphics::{Color, CursorKind, Modifier, Rect, Style},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     keyboard::{KeyCode, KeyModifiers},
-    Document, Editor, Theme, View,
+    view, Document, Editor, Theme, View,
 };
 use std::{mem::take, num::NonZeroUsize, path::PathBuf, rc::Rc, sync::Arc};
 
 use tui::{buffer::Buffer as Surface, text::Span};
 
 use super::{completion::CompletionItem, statusline};
-use super::{document::LineDecoration, lsp::SignatureHelp};
+use super::{lsp::SignatureHelp, text_decorations::CopilotDecoration};
 
 pub struct EditorView {
     pub keymaps: Keymaps,
@@ -43,6 +44,8 @@ pub struct EditorView {
     pub(crate) last_insert: (commands::MappableCommand, Vec<InsertEvent>),
     pub(crate) completion: Option<Completion>,
     spinners: ProgressSpinners,
+    /// Tracks if the terminal window is focused by reaction to terminal focus events
+    terminal_focused: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +74,7 @@ impl EditorView {
             last_insert: (commands::MappableCommand::normal_mode, Vec::new()),
             completion: None,
             spinners: ProgressSpinners::default(),
+            terminal_focused: true,
         }
     }
 
@@ -93,11 +97,10 @@ impl EditorView {
         let config = editor.config();
 
         let text_annotations = view.text_annotations(doc, Some(theme));
-        let mut line_decorations: Vec<Box<dyn LineDecoration>> = Vec::new();
-        let mut translated_positions: Vec<TranslatedPosition> = Vec::new();
+        let mut decorations = DecorationManager::default();
 
         if is_focused && config.cursorline {
-            line_decorations.push(Self::cursorline_decorator(doc, view, theme))
+            decorations.add_decoration(Self::cursorline(doc, view, theme));
         }
 
         if is_focused && config.cursorcolumn {
@@ -118,7 +121,7 @@ impl EditorView {
                 );
             };
 
-            line_decorations.push(Box::new(line_decoration));
+            decorations.add_decoration(line_decoration);
         }
 
         let mut highlights =
@@ -172,20 +175,38 @@ impl EditorView {
                 view.area,
                 theme,
                 is_focused,
-                &mut line_decorations,
+                &mut decorations,
             );
         }
 
+        let primary_cursor = doc
+            .selection(view.id)
+            .primary()
+            .cursor(doc.text().slice(..));
+
         if is_focused {
-            let cursor = doc
-                .selection(view.id)
-                .primary()
-                .cursor(doc.text().slice(..));
-            // set the cursor_cache to out of view in case the position is not found
-            editor.cursor_cache.set(Some(None));
-            let update_cursor_cache =
-                |_: &mut TextRenderer, pos| editor.cursor_cache.set(Some(Some(pos)));
-            translated_positions.push((cursor, Box::new(update_cursor_cache)));
+            decorations.add_decoration(text_decorations::Cursor {
+                cache: &editor.cursor_cache,
+                primary_cursor,
+            });
+        }
+        if config.lsp.inline_diagnostics.enable(inner.width) {
+            decorations.add_decoration(InlineDiagnostics::new(
+                doc.diagnostics(),
+                theme,
+                primary_cursor,
+                config.lsp.inline_diagnostics.clone(),
+            ));
+        };
+
+        if let Some((text, pos)) = doc.copilot_state.lock().get_completion_text_and_pos() {
+            decorations.add_decoration(CopilotDecoration::new(
+                theme.get("ui.text.focused"),
+                doc.text().slice(..),
+                text.to_string(),
+                pos,
+                inner.width,
+            ));
         }
 
         render_document(
@@ -196,8 +217,7 @@ impl EditorView {
             &text_annotations,
             highlights,
             theme,
-            &mut line_decorations,
-            &mut translated_positions,
+            decorations,
         );
         Self::render_rulers(editor, doc, view, inner, surface, theme);
 
@@ -213,7 +233,9 @@ impl EditorView {
             }
         }
 
-        Self::render_diagnostics(doc, view, inner, surface, theme);
+        if config.lsp.display_diagnostic_message {
+            Self::render_diagnostics(doc, view, inner, surface, theme);
+        }
 
         let statusline_area = view
             .area
@@ -576,7 +598,7 @@ impl EditorView {
         viewport: Rect,
         theme: &Theme,
         is_focused: bool,
-        line_decorations: &mut Vec<Box<(dyn LineDecoration + 'd)>>,
+        decoration_manager: &mut DecorationManager<'d>,
     ) {
         let text = doc.text().slice(..);
         let cursors: Rc<[_]> = doc
@@ -630,7 +652,7 @@ impl EditorView {
                 }
                 text.clear();
             };
-            line_decorations.push(Box::new(gutter_decoration));
+            decoration_manager.add_decoration(gutter_decoration);
 
             offset += width as u16;
         }
@@ -699,11 +721,7 @@ impl EditorView {
     }
 
     /// Apply the highlighting on the lines where a cursor is active
-    pub fn cursorline_decorator(
-        doc: &Document,
-        view: &View,
-        theme: &Theme,
-    ) -> Box<dyn LineDecoration> {
+    pub fn cursorline(doc: &Document, view: &View, theme: &Theme) -> impl Decoration {
         let text = doc.text().slice(..);
         // TODO only highlight the visual line that contains the cursor instead of the full visual line
         let primary_line = doc.selection(view.id).primary().cursor_line(text);
@@ -724,16 +742,14 @@ impl EditorView {
         let secondary_style = theme.get("ui.cursorline.secondary");
         let viewport = view.area;
 
-        let line_decoration = move |renderer: &mut TextRenderer, pos: LinePos| {
+        move |renderer: &mut TextRenderer, pos: LinePos| {
             let area = Rect::new(viewport.x, viewport.y + pos.visual_line, viewport.width, 1);
             if primary_line == pos.doc_line {
                 renderer.surface.set_style(area, primary_style);
             } else if secondary_lines.binary_search(&pos.doc_line).is_ok() {
                 renderer.surface.set_style(area, secondary_style);
             }
-        };
-
-        Box::new(line_decoration)
+        }
     }
 
     /// Apply the highlighting on the columns where a cursor is active
@@ -1070,6 +1086,7 @@ impl EditorView {
                 let editor = &mut cxt.editor;
 
                 if let Some((pos, view_id)) = pos_and_view(editor, row, column, true) {
+                    let prev_view_id = view!(editor).id;
                     let doc = doc_mut!(editor, &view!(editor, view_id).doc);
 
                     if modifiers == KeyModifiers::ALT {
@@ -1077,6 +1094,10 @@ impl EditorView {
                         doc.set_selection(view_id, selection.push(Range::point(pos)));
                     } else {
                         doc.set_selection(view_id, Selection::point(pos));
+                    }
+
+                    if view_id != prev_view_id {
+                        self.clear_completion(editor);
                     }
 
                     editor.focus(view_id);
@@ -1372,13 +1393,17 @@ impl Component for EditorView {
 
             Event::Mouse(event) => self.handle_mouse_event(event, &mut cx),
             Event::IdleTimeout => self.handle_idle_timeout(&mut cx),
-            Event::FocusGained => EventResult::Ignored(None),
+            Event::FocusGained => {
+                self.terminal_focused = true;
+                EventResult::Consumed(None)
+            }
             Event::FocusLost => {
                 if context.editor.config().auto_save {
                     if let Err(e) = commands::typed::write_all_impl(context, false, false) {
                         context.editor.set_error(format!("{}", e));
                     }
                 }
+                self.terminal_focused = false;
                 EventResult::Consumed(None)
             }
         }

@@ -64,6 +64,7 @@ Its settings will be merged with the configuration directory `config.toml` and t
 | `text-width` | Maximum line length. Used for the `:reflow` command and soft-wrapping if `soft-wrap.wrap-at-text-width` is set | `80` |
 | `workspace-lsp-roots` | Directories relative to the workspace root that are treated as LSP roots. Should only be set in `.helix/config.toml` | `[]` |
 | `default-line-ending` | The line ending to use for new documents. Can be `native`, `lf`, `crlf`, `ff`, `cr` or `nel`. `native` uses the platform's native line ending (`crlf` on Windows, otherwise `lf`). | `native` |
+| `insert-final-newline` | Whether to automatically insert a trailing line-ending on write if missing | `true` |
 
 ### `[editor.statusline]` Section
 
@@ -133,6 +134,7 @@ The following statusline elements can be configured:
 | `display-signature-help-docs` | Display docs under signature help popup             | `true`  |
 | `snippets`      | Enables snippet completions. Requires a server restart (`:lsp-restart`) to take effect after `:config-reload`/`:set`. | `true`  |
 | `goto-reference-include-declaration` | Include declaration in the goto references popup. | `true`  |
+| `display-inline-diagnostics`  | Display diagnostics under their starting line       | `true`  |
 
 [^1]: By default, a progress spinner is shown in the statusline beside the file path.
 

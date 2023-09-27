@@ -1,5 +1,6 @@
 use crate::{
     align_view,
+    annotations::diagnostics::InlineDiagnosticsConfig,
     document::{DocumentSavedEventFuture, DocumentSavedEventResult, Mode, SavePoint},
     graphics::{CursorKind, Rect},
     info::Info,
@@ -32,7 +33,7 @@ use std::{
 use tokio::{
     sync::{
         mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-        oneshot, Notify, RwLock,
+        oneshot,
     },
     time::{sleep, Duration, Instant, Sleep},
 };
@@ -244,7 +245,7 @@ pub struct Config {
     /// Set a global text_width
     pub text_width: usize,
     /// Time in milliseconds since last keypress before idle timers trigger.
-    /// Used for autocompletion, set to 0 for instant. Defaults to 400ms.
+    /// Used for autocompletion, set to 0 for instant. Defaults to 250ms.
     #[serde(
         serialize_with = "serialize_duration_millis",
         deserialize_with = "deserialize_duration_millis"
@@ -287,6 +288,8 @@ pub struct Config {
     pub workspace_lsp_roots: Vec<PathBuf>,
     /// Which line ending to choose for new documents. Defaults to `native`. i.e. `crlf` on Windows, otherwise `lf`.
     pub default_line_ending: LineEndingConfig,
+    /// Whether to automatically insert a trailing line-ending on write if missing. Defaults to `true`.
+    pub insert_final_newline: bool,
     /// Enables smart tab
     pub smart_tab: Option<SmartTabConfig>,
 }
@@ -377,6 +380,11 @@ pub struct LspConfig {
     pub snippets: bool,
     /// Whether to include declaration in the goto reference query
     pub goto_reference_include_declaration: bool,
+    /// Display diagnostic on the same line they occur automatically.
+    /// Also called "error lens"-style diagnostics, in reference to the popular VSCode extension.
+    pub inline_diagnostics: InlineDiagnosticsConfig,
+    pub display_diagnostic_message: bool,
+    pub copilot_auto: bool,
 }
 
 impl Default for LspConfig {
@@ -389,6 +397,9 @@ impl Default for LspConfig {
             display_inlay_hints: false,
             snippets: true,
             goto_reference_include_declaration: true,
+            inline_diagnostics: InlineDiagnosticsConfig::default(),
+            display_diagnostic_message: true,
+            copilot_auto: true,
         }
     }
 }
@@ -817,7 +828,7 @@ impl Default for Config {
             auto_completion: true,
             auto_format: true,
             auto_save: false,
-            idle_timeout: Duration::from_millis(400),
+            idle_timeout: Duration::from_millis(250),
             preview_completion_insert: true,
             completion_trigger_len: 2,
             auto_info: true,
@@ -842,6 +853,7 @@ impl Default for Config {
             completion_replace: false,
             workspace_lsp_roots: Vec::new(),
             default_line_ending: LineEndingConfig::default(),
+            insert_final_newline: true,
             smart_tab: Some(SmartTabConfig::default()),
         }
     }
@@ -925,10 +937,6 @@ pub struct Editor {
     pub exit_code: i32,
 
     pub config_events: (UnboundedSender<ConfigEvent>, UnboundedReceiver<ConfigEvent>),
-    /// Allows asynchronous tasks to control the rendering
-    /// The `Notify` allows asynchronous tasks to request the editor to perform a redraw
-    /// The `RwLock` blocks the editor from performing the render until an exclusive lock can be acquired
-    pub redraw_handle: RedrawHandle,
     pub needs_redraw: bool,
     /// Cached position of the cursor calculated during rendering.
     /// The content of `cursor_cache` is returned by `Editor::cursor` if
@@ -942,7 +950,7 @@ pub struct Editor {
     /// This cache is only a performance optimization to
     /// avoid calculating the cursor position multiple
     /// times during rendering and should not be set by other functions.
-    pub cursor_cache: Cell<Option<Option<Position>>>,
+    pub cursor_cache: CursorCache,
     /// When a new completion request is sent to the server old
     /// unfinished request must be dropped. Each completion
     /// request is associated with a channel that cancels
@@ -954,8 +962,6 @@ pub struct Editor {
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
-
-pub type RedrawHandle = (Arc<Notify>, Arc<RwLock<()>>);
 
 #[derive(Debug)]
 pub enum EditorEvent {
@@ -1062,9 +1068,8 @@ impl Editor {
             auto_pairs,
             exit_code: 0,
             config_events: unbounded_channel(),
-            redraw_handle: Default::default(),
             needs_redraw: false,
-            cursor_cache: Cell::new(None),
+            cursor_cache: CursorCache::default(),
             completion_request_handle: None,
         }
     }
@@ -1453,7 +1458,7 @@ impl Editor {
             )?;
 
             if let Some(diff_base) = self.diff_providers.get_diff_base(&path) {
-                doc.set_diff_base(diff_base, self.redraw_handle.clone());
+                doc.set_diff_base(diff_base);
             }
             doc.set_version_control_head(self.diff_providers.get_current_head_name(&path));
 
@@ -1686,15 +1691,7 @@ impl Editor {
     pub fn cursor(&self) -> (Option<Position>, CursorKind) {
         let config = self.config();
         let (view, doc) = current_ref!(self);
-        let cursor = doc
-            .selection(view.id)
-            .primary()
-            .cursor(doc.text().slice(..));
-        let pos = self
-            .cursor_cache
-            .get()
-            .unwrap_or_else(|| view.screen_coords_at_pos(doc, doc.text().slice(..), cursor));
-        if let Some(mut pos) = pos {
+        if let Some(mut pos) = self.cursor_cache.get(view, doc) {
             let inner = view.inner_area(doc);
             pos.col += inner.x as usize;
             pos.row += inner.y as usize;
@@ -1752,7 +1749,7 @@ impl Editor {
                     return EditorEvent::DebuggerEvent(event)
                 }
 
-                _ = self.redraw_handle.0.notified() => {
+                _ = helix_event::redraw_requested() => {
                     if  !self.needs_redraw{
                         self.needs_redraw = true;
                         let timeout = Instant::now() + Duration::from_millis(33);
@@ -1820,6 +1817,9 @@ impl Editor {
             doc.set_selection(view.id, selection);
             doc.restore_cursor = false;
         }
+        let mut copilot_state = doc.copilot_state.lock();
+        copilot_state.exited_insert_mode();
+        copilot_state.reset_state();
     }
 
     pub fn current_stack_frame(&self) -> Option<&StackFrame> {
@@ -1861,5 +1861,30 @@ fn try_restore_indent(doc: &mut Document, view: &mut View) {
                 (line_start_pos, pos, None)
             });
         doc.apply(&transaction, view.id);
+    }
+}
+
+#[derive(Default)]
+pub struct CursorCache(Cell<Option<Option<Position>>>);
+
+impl CursorCache {
+    pub fn get(&self, view: &View, doc: &Document) -> Option<Position> {
+        if let Some(pos) = self.0.get() {
+            return pos;
+        }
+
+        let text = doc.text().slice(..);
+        let cursor = doc.selection(view.id).primary().cursor(text);
+        let res = view.screen_coords_at_pos(doc, text, cursor);
+        self.set(res);
+        res
+    }
+
+    pub fn set(&self, cursor_pos: Option<Position>) {
+        self.0.set(Some(cursor_pos))
+    }
+
+    pub fn reset(&self) {
+        self.0.set(None)
     }
 }
