@@ -50,6 +50,7 @@ impl SeverityFilter {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct InlineDiagnosticsConfig {
+    pub enabled: bool,
     pub cursor_line: SeverityFilter,
     pub other_lines: SeverityFilter,
     pub min_diagnostic_width: u16,
@@ -66,6 +67,9 @@ impl InlineDiagnosticsConfig {
     // (or inline diagnostics are displed) `None` is returned. In that case inline
     // diagnostics should not be shown
     pub fn enable(&self, width: u16) -> bool {
+        if !self.enabled {
+            return false;
+        }
         let disabled = matches!(
             self,
             Self {
@@ -110,6 +114,7 @@ impl Default for InlineDiagnosticsConfig {
             prefix_len: 1,
             max_wrap: 20,
             max_diagnostics: 20,
+            enabled: true,
         }
     }
 }

@@ -6,6 +6,7 @@ pub mod snippet;
 mod transport;
 
 pub use client::Client;
+pub mod copilot_types;
 pub use futures_executor::block_on;
 pub use jsonrpc::Call;
 pub use lsp::{Position, Url};
