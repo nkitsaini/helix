@@ -1,8 +1,10 @@
 use std::cmp::Ordering;
 
-use helix_core::doc_formatter::FormattedGrapheme;
-use helix_core::Position;
+use helix_core::doc_formatter::{DocumentFormatter, FormattedGrapheme, TextFormat};
+use helix_core::text_annotations::TextAnnotations;
+use helix_core::{coords_at_pos, Position, RopeSlice};
 use helix_view::editor::CursorCache;
+use helix_view::theme::Style;
 
 use crate::ui::document::{LinePos, TextRenderer};
 
@@ -169,5 +171,103 @@ impl Decoration for Cursor<'_> {
             self.cache.set(Some(position));
         }
         usize::MAX
+    }
+}
+pub struct CopilotDecoration {
+    style: Style,
+    text: String,
+    row: usize,
+    col: usize,
+    view_width: u16,
+}
+
+impl CopilotDecoration {
+    pub fn new(
+        style: Style,
+        doc_text: RopeSlice,
+        completion_text: String,
+        completion_pos: usize,
+        view_width: u16,
+    ) -> CopilotDecoration {
+        let coords = coords_at_pos(doc_text, completion_pos);
+        CopilotDecoration {
+            style,
+            text: completion_text,
+            row: coords.row,
+            col: coords.col,
+            view_width,
+        }
+    }
+}
+
+impl Decoration for CopilotDecoration {
+    fn render_virt_lines(
+        &mut self,
+        _renderer: &mut TextRenderer,
+        _pos: LinePos,
+        _virt_off: helix_core::Position, // u16
+    ) -> helix_core::Position {
+        if _pos.doc_line != self.row {
+            return helix_core::Position::new(0, 0);
+        }
+
+        let mut lines = self.text.split('\n').enumerate();
+        lines.next();
+        let n_lines = lines.clone().count();
+
+        let mut text_fmt = TextFormat::default();
+        text_fmt.viewport_width = self.view_width;
+        let annotations = TextAnnotations::default();
+
+        while let Some((idx, line)) = lines.next() {
+            let formatter =
+                DocumentFormatter::new_at_prev_checkpoint(line.into(), &text_fmt, &annotations, 0);
+
+            for grapheme in formatter {
+                _renderer.draw_decoration_grapheme(
+                    grapheme.raw,
+                    self.style,
+                    _pos.visual_line + grapheme.visual_pos.row as u16 + idx as u16,
+                    grapheme.visual_pos.col as u16,
+                );
+            }
+        }
+
+        return helix_core::Position::new(0, n_lines);
+        // n_lines as u16
+    }
+
+    fn decorate_line(&mut self, _renderer: &mut TextRenderer, _pos: LinePos) {
+        if self.row != _pos.doc_line {
+            return;
+        }
+
+        let first_line = if let Some(split) = self.text.split_once('\n') {
+            split.0
+        } else {
+            &self.text
+        };
+
+        let mut text_fmt = TextFormat::default();
+        text_fmt.viewport_width = self.view_width;
+        let annotations = TextAnnotations::default();
+        let formatter = DocumentFormatter::new_at_prev_checkpoint(
+            first_line.into(),
+            &text_fmt,
+            &annotations,
+            0,
+        );
+
+        for grapheme in formatter {
+            if grapheme.char_idx < self.col {
+                continue;
+            }
+            _renderer.draw_decoration_grapheme(
+                grapheme.raw,
+                self.style,
+                _pos.visual_line + grapheme.visual_pos.row as u16,
+                grapheme.visual_pos.col as u16,
+            );
+        }
     }
 }

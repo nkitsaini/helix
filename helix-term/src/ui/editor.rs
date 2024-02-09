@@ -35,6 +35,8 @@ use std::{mem::take, num::NonZeroUsize, path::PathBuf, rc::Rc, sync::Arc};
 
 use tui::{buffer::Buffer as Surface, text::Span};
 
+use super::text_decorations::CopilotDecoration;
+
 pub struct EditorView {
     pub keymaps: Keymaps,
     on_next_key: Option<OnKeyCallback>,
@@ -193,6 +195,17 @@ impl EditorView {
             primary_cursor,
             config.lsp.inline_diagnostics.clone(),
         ));
+
+        if let Some((text, pos)) = doc.copilot_state.lock().get_completion_text_and_pos() {
+            decorations.add_decoration(CopilotDecoration::new(
+                theme.get("ui.text.focused"),
+                doc.text().slice(..),
+                text.to_string(),
+                pos,
+                inner.width,
+            ));
+        }
+
         render_document(
             surface,
             inner,
