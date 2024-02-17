@@ -7,6 +7,7 @@ mod transport;
 
 pub use client::Client;
 pub mod copilot_types;
+mod uri_deserializer;
 pub use futures_executor::block_on;
 pub use jsonrpc::Call;
 pub use lsp::{Position, Url};
@@ -27,6 +28,8 @@ use std::{
 
 use thiserror::Error;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+
+use crate::uri_deserializer::to_percent_decode_url;
 
 pub type Result<T> = core::result::Result<T, Error>;
 pub type LanguageServerName = String;
@@ -613,7 +616,8 @@ impl Notification {
             lsp::notification::Initialized::METHOD => Self::Initialized,
             lsp::notification::Exit::METHOD => Self::Exit,
             lsp::notification::PublishDiagnostics::METHOD => {
-                let params: lsp::PublishDiagnosticsParams = params.parse()?;
+                let mut params: lsp::PublishDiagnosticsParams = params.parse()?;
+                params.uri = to_percent_decode_url(&params.uri);
                 Self::PublishDiagnostics(params)
             }
 
