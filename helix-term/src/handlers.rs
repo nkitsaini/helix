@@ -8,7 +8,7 @@ use crate::events;
 use crate::handlers::completion::CompletionHandler;
 use crate::handlers::signature_help::SignatureHelpHandler;
 
-pub use completion::trigger_auto_completion;
+pub use completion::{trigger_auto_completion, TriggerKind};
 pub use helix_view::handlers::lsp::SignatureHelpInvoked;
 pub use helix_view::handlers::Handlers;
 

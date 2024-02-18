@@ -24,6 +24,12 @@ pub enum CompletionEvent {
         doc: DocumentId,
         view: ViewId,
     },
+    /// A completion was manually requested (c-x)
+    ReTrigger {
+        cursor: usize,
+        doc: DocumentId,
+        view: ViewId,
+    },
     /// Some text was deleted and the cursor is now at `pos`
     DeleteText { cursor: usize },
     /// Invalidate the current auto completion trigger

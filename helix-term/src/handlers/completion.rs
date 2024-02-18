@@ -32,10 +32,11 @@ use crate::ui::{self, CompletionItem, Popup};
 use super::Handlers;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum TriggerKind {
+pub enum TriggerKind {
     Auto,
     TriggerChar,
     Manual,
+    Retrigger,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -122,6 +123,17 @@ impl helix_event::AsyncHook for CompletionHandler {
                 self.finish_debounce();
                 return None;
             }
+            CompletionEvent::ReTrigger { cursor, doc, view } => {
+                // immediately request completions and drop all auto completion requests
+                self.request = None;
+                self.trigger = Some(Trigger {
+                    pos: cursor,
+                    view,
+                    doc,
+                    kind: TriggerKind::Retrigger,
+                });
+                return None;
+            }
             CompletionEvent::Cancel => {
                 self.trigger = None;
                 self.request = None;
@@ -205,11 +217,21 @@ fn request_completion(
             let pos = pos_to_lsp_pos(text, cursor, offset_encoding);
             let doc_id = doc.identifier();
             let context = if trigger.kind == TriggerKind::Manual {
-                lsp::CompletionContext {
+                Some(lsp::CompletionContext {
                     trigger_kind: lsp::CompletionTriggerKind::INVOKED,
                     trigger_character: None,
-                }
-            } else {
+                })
+            } else if trigger.kind == TriggerKind::Auto {
+                Some(lsp::CompletionContext {
+                    trigger_kind: lsp::CompletionTriggerKind::INVOKED,
+                    trigger_character: None,
+                })
+            } else if trigger.kind == TriggerKind::Retrigger {
+                Some(lsp::CompletionContext {
+                    trigger_kind: lsp::CompletionTriggerKind::TRIGGER_FOR_INCOMPLETE_COMPLETIONS,
+                    trigger_character: None,
+                })
+            } else if trigger.kind == TriggerKind::TriggerChar {
                 let trigger_char =
                     ls.capabilities()
                         .completion_provider
@@ -221,14 +243,21 @@ fn request_completion(
                                 .iter()
                                 .find(|&trigger| trigger_text.ends_with(trigger))
                         });
-                lsp::CompletionContext {
+                trigger_char.map(|char| lsp::CompletionContext {
                     trigger_kind: lsp::CompletionTriggerKind::TRIGGER_CHARACTER,
-                    trigger_character: trigger_char.cloned(),
-                }
+                    trigger_character: Some(char.clone()),
+                })
+            } else {
+                unreachable!()
+            };
+
+            let context = match context {
+                Some(c) => c,
+                None => return None,
             };
 
             let completion_response = ls.completion(doc_id, pos, None, context).unwrap();
-            async move {
+            Some(async move {
                 let json = completion_response.await?;
                 let response: Option<lsp::CompletionResponse> = serde_json::from_value(json)?;
                 let items = match response {
@@ -248,8 +277,9 @@ fn request_completion(
                 })
                 .collect();
                 anyhow::Ok(items)
-            }
+            })
         })
+        .filter_map(|x| x)
         .collect();
 
     let future = async move {
@@ -317,7 +347,8 @@ fn show_completion(
 pub fn trigger_auto_completion(
     tx: &Sender<CompletionEvent>,
     editor: &Editor,
-    trigger_char_only: bool,
+    // trigger_char_only: bool,
+    trigger_type: Option<TriggerKind>, // Tries to auto-detect if missing
 ) {
     let config = editor.config.load();
     if !config.auto_completion {
@@ -336,7 +367,9 @@ pub fn trigger_auto_completion(
                         ..
                     }) if triggers.iter().any(|trigger| text.ends_with(trigger)))
         });
-    if is_trigger_char {
+
+    if is_trigger_char && (trigger_type.is_none() || trigger_type == Some(TriggerKind::TriggerChar))
+    {
         send_blocking(
             tx,
             CompletionEvent::TriggerChar {
@@ -348,18 +381,38 @@ pub fn trigger_auto_completion(
         return;
     }
 
-    let is_auto_trigger = !trigger_char_only
-        && doc
-            .text()
-            .chars_at(cursor)
-            .reversed()
-            .take(config.completion_trigger_len as usize)
-            .all(char_is_word);
+    let can_auto_trigger = doc
+        .text()
+        .chars_at(cursor)
+        .reversed()
+        .take(config.completion_trigger_len as usize)
+        .all(char_is_word);
 
-    if is_auto_trigger {
+    if can_auto_trigger && (trigger_type.is_none() || trigger_type == Some(TriggerKind::Auto)) {
         send_blocking(
             tx,
             CompletionEvent::AutoTrigger {
+                cursor,
+                doc: doc.id(),
+                view: view.id,
+            },
+        );
+    }
+
+    if trigger_type == Some(TriggerKind::Manual) {
+        send_blocking(
+            tx,
+            CompletionEvent::ManualTrigger {
+                cursor,
+                doc: doc.id(),
+                view: view.id,
+            },
+        );
+    }
+    if trigger_type == Some(TriggerKind::Retrigger) {
+        send_blocking(
+            tx,
+            CompletionEvent::ReTrigger {
                 cursor,
                 doc: doc.id(),
                 view: view.id,
@@ -378,7 +431,11 @@ fn update_completions(cx: &mut commands::Context, c: Option<char>) {
                 // clearing completions might mean we want to immediately rerequest them (usually
                 // this occurs if typing a trigger char)
                 if c.is_some() {
-                    trigger_auto_completion(&cx.editor.handlers.completions, cx.editor, false);
+                    trigger_auto_completion(
+                        &cx.editor.handlers.completions,
+                        cx.editor,
+                        Some(TriggerKind::Retrigger),
+                    );
                 }
             }
         }
@@ -448,7 +505,7 @@ pub(super) fn register_hooks(handlers: &Handlers) {
             send_blocking(&tx, CompletionEvent::Cancel);
             clear_completions(event.cx);
         } else if event.new_mode == Mode::Insert {
-            trigger_auto_completion(&tx, event.cx.editor, false)
+            trigger_auto_completion(&tx, event.cx.editor, None)
         }
         Ok(())
     });
@@ -458,7 +515,7 @@ pub(super) fn register_hooks(handlers: &Handlers) {
         if event.cx.editor.last_completion.is_some() {
             update_completions(event.cx, Some(event.c))
         } else {
-            trigger_auto_completion(&tx, event.cx.editor, false);
+            trigger_auto_completion(&tx, event.cx.editor, None);
         }
         Ok(())
     });

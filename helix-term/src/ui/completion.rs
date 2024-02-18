@@ -20,6 +20,7 @@ use helix_view::{graphics::Rect, Document, Editor};
 use crate::commands;
 use crate::ui::{menu, Markdown, Menu, Popup, PromptEvent};
 
+use crate::handlers::TriggerKind;
 use helix_lsp::{lsp, util, OffsetEncoding};
 
 impl menu::Item for CompletionItem {
@@ -328,7 +329,11 @@ impl Completion {
                     }
                     // we could have just inserted a trigger char (like a `crate::` completion for rust
                     // so we want to retrigger immediately when accepting a completion.
-                    trigger_auto_completion(&editor.handlers.completions, editor, true);
+                    trigger_auto_completion(
+                        &editor.handlers.completions,
+                        editor,
+                        Some(TriggerKind::TriggerChar),
+                    );
                 }
             };
 
