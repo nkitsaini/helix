@@ -241,6 +241,7 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct Config {
+    pub copilot_auto_render: bool,
     /// Padding to keep between the edge of the screen and the cursor when scrolling. Defaults to 5.
     pub scrolloff: usize,
     /// Number of lines to scroll at once. Defaults to 3
@@ -442,7 +443,7 @@ impl Default for LspConfig {
             snippets: true,
             goto_reference_include_declaration: true,
             inline_diagnostics: InlineDiagnosticsConfig::default(),
-            display_diagnostic_message: false,
+            display_diagnostic_message: true,
         }
     }
 }
@@ -872,6 +873,7 @@ pub enum PopupBorderConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            copilot_auto_render: true,
             scrolloff: 5,
             scroll_lines: 3,
             mouse: true,
@@ -949,6 +951,7 @@ pub struct Breakpoint {
 use futures_util::stream::{Flatten, Once};
 
 pub struct Editor {
+    pub auto_render_copilot: bool,
     /// Current editing mode.
     pub mode: Mode,
     pub tree: Tree,
@@ -1099,6 +1102,7 @@ impl Editor {
         area.height -= 1;
 
         Self {
+            auto_render_copilot: conf.copilot_auto_render,
             mode: Mode::Normal,
             tree: Tree::new(area),
             next_document_id: DocumentId::default(),

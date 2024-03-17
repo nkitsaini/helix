@@ -27,10 +27,11 @@ use helix_view::{
     graphics::{Color, CursorKind, Modifier, Rect, Style},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     keyboard::{KeyCode, KeyModifiers},
-    Document, Editor, Theme, View,
+    view, Document, Editor, Theme, View,
 };
 use std::{mem::take, num::NonZeroUsize, path::PathBuf, rc::Rc, sync::Arc};
 
+use super::text_decorations::CopilotDecoration;
 use tui::{buffer::Buffer as Surface, text::Span};
 
 pub struct EditorView {
@@ -185,6 +186,12 @@ impl EditorView {
                 primary_cursor,
             });
         }
+        decorations.add_decoration(CopilotDecoration::new(
+            doc,
+            doc.text_format(view.inner_width(doc), Some(&editor.theme)),
+            theme.get("ui.get.focused"),
+        ));
+
         let width = view.inner_width(doc);
         let config = doc.config.load();
         let enable_cursor_line = view
@@ -194,12 +201,14 @@ impl EditorView {
             .lsp
             .inline_diagnostics
             .prepare(width, enable_cursor_line);
+
         decorations.add_decoration(InlineDiagnostics::new(
             doc,
             theme,
             primary_cursor,
             inline_diagnostic_config,
         ));
+
         render_document(
             surface,
             inner,
