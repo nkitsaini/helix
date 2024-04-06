@@ -161,6 +161,10 @@ pub(super) fn try_register_hooks(handlers: &Handlers) {
             return Ok(());
         };
 
+        if event.command.name() == "write-quit" || event.command.name() == "quit" || event.command.name() == "write-quit!" || event.command.name() == "quit!" {
+            return Ok(());
+        }
+
         let (_, doc) = current!(event.cx.editor);
         doc.clear_copilot_completions();
         Ok(())
