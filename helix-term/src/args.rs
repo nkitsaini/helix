@@ -29,9 +29,11 @@ impl Args {
 
         argv.next(); // skip the program, we don't care about that
 
+        args.enable_copilot = true;
+
         while let Some(arg) = argv.next() {
             match arg.as_str() {
-                "-a" => args.enable_copilot = true,
+                "-a" => args.enable_copilot = false,
                 "--" => break, // stop parsing at this point treat the remaining as files
                 "--version" => args.display_version = true,
                 "--help" => args.display_help = true,
