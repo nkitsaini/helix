@@ -161,7 +161,9 @@ pub(super) fn try_register_hooks(handlers: &Handlers) {
             return Ok(());
         };
 
-        if event.command.name() == "write-quit" || event.command.name() == "quit" || event.command.name() == "write-quit!" || event.command.name() == "quit!" {
+        if event.command.name() == "write-quit" || event.command.name() == "quit" || event.command.name() == "write-quit!" || event.command.name() == "quit!" || event.command.name() == "write-quit-all" || event.command.name() == "quit-all" || event.command.name() == "write-quit-all!" || event.command.name() == "quit-all!"
+
+        {
             return Ok(());
         }
 
