@@ -5,6 +5,7 @@ mod file_operations;
 pub mod jsonrpc;
 pub mod snippet;
 mod transport;
+mod uri_deserializer;
 
 use arc_swap::ArcSwap;
 pub use client::Client;
@@ -19,6 +20,7 @@ use helix_core::syntax::{
 };
 use helix_stdx::path;
 use tokio::sync::mpsc::UnboundedReceiver;
+use crate::uri_deserializer::to_percent_decode_url;
 
 use std::{
     collections::HashMap,
@@ -625,7 +627,8 @@ impl Notification {
             lsp::notification::Initialized::METHOD => Self::Initialized,
             lsp::notification::Exit::METHOD => Self::Exit,
             lsp::notification::PublishDiagnostics::METHOD => {
-                let params: lsp::PublishDiagnosticsParams = params.parse()?;
+                let mut params: lsp::PublishDiagnosticsParams = params.parse()?;
+                params.uri = to_percent_decode_url(&params.uri);
                 Self::PublishDiagnostics(params)
             }
 
