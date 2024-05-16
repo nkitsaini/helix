@@ -1359,6 +1359,56 @@ fn update(
         Ok(())
     }
 }
+fn eslint_fix_all(
+    cx: &mut compositor::Context,
+    args: &[Cow<str>],
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let cmd = "eslint.applyAllFixes";
+    let doc = doc!(cx.editor);
+    let Some(language_server_id) = doc
+        .language_servers_with_feature(LanguageServerFeature::WorkspaceCommand)
+        .find_map(|ls| {
+            let option = ls.capabilities()
+                .execute_command_provider
+                .as_ref()?;
+
+             let valid = option
+            .commands
+            .iter().any(|x| x == cmd);
+    if valid {
+        Some(ls.id())
+    } else {
+        None
+    }
+
+        })
+    else {
+        cx.editor.set_status(
+             "No active language servers for this document support eslint.applyAllFixes commands",
+        );
+        return Ok(());
+    };
+
+    let arg = serde_json::json!({
+        "uri": doc.url(),
+        "version": doc.version()
+    });
+
+    execute_lsp_command(
+        cx.editor,
+        language_server_id,
+        helix_lsp::lsp::Command {
+            title: cmd.to_string(),
+            arguments: Some(vec![arg]),
+            command: cmd.to_string(),
+        },
+    );
+    Ok(())
+}
 
 fn lsp_workspace_command(
     cx: &mut compositor::Context,
@@ -2855,6 +2905,13 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         doc: "Open workspace command picker",
         fun: lsp_workspace_command,
         signature: CommandSignature::positional(&[completers::lsp_workspace_command]),
+    },
+    TypableCommand {
+        name: "eslint-fix-all",
+        aliases: &[],
+        doc: "Fix all eslint",
+        fun: eslint_fix_all,
+        signature: CommandSignature::none(),
     },
     TypableCommand {
         name: "lsp-restart",
