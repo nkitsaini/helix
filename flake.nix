@@ -180,6 +180,7 @@
         shellHook = ''
           export HELIX_RUNTIME="$PWD/runtime"
           export RUST_BACKTRACE="1"
+          export HELIX_DISABLE_AUTO_GRAMMAR_BUILD="1"
           export RUSTFLAGS="''${RUSTFLAGS:-""} ${rustFlagsEnv}"
         '';
       };
